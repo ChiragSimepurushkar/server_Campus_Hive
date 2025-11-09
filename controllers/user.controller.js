@@ -96,163 +96,163 @@ export async function registerUserController(request, response) {
 }
 
 export async function verifyEmailController(req, res) {
-  try {
-    const { email, otp } = req.body;
+    try {
+        const { email, otp } = req.body;
 
-    // 1️⃣ Validate input
-    if (!email || !otp) {
-      return res.status(400).json({
-        success: false,
-        error: true,
-        message: "Email and OTP are required.",
-      });
+        // 1️⃣ Validate input
+        if (!email || !otp) {
+            return res.status(400).json({
+                success: false,
+                error: true,
+                message: "Email and OTP are required.",
+            });
+        }
+
+        // 2️⃣ Find user and explicitly include otp fields
+        const user = await UserModel.findOne({ email }).select("+otp +otpExpires");
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                error: true,
+                message: "User not found.",
+            });
+        }
+
+        // 3️⃣ Check if OTP exists in DB
+        if (!user.otp || !user.otpExpires) {
+            return res.status(400).json({
+                success: false,
+                error: true,
+                message: "No OTP found. Please request a new one.",
+            });
+        }
+
+        // 4️⃣ Convert expiration to timestamp for consistent comparison
+        const otpExpiresTime = new Date(user.otpExpires).getTime();
+        const now = Date.now();
+
+        if (isNaN(otpExpiresTime) || otpExpiresTime < now) {
+            return res.status(400).json({
+                success: false,
+                error: true,
+                message: "OTP expired. Please request a new one.",
+            });
+        }
+
+        // 5️⃣ Check OTP match (convert both to string for consistency)
+        if (String(user.otp) !== String(otp)) {
+            return res.status(400).json({
+                success: false,
+                error: true,
+                message: "Invalid OTP. Please try again.",
+            });
+        }
+
+        // 6️⃣ Mark user verified and clear OTP
+        user.verify_email = true;
+        user.otp = null;
+        user.otpExpires = null;
+        await user.save();
+
+        // 7️⃣ Send success response
+        return res.status(200).json({
+            success: true,
+            error: false,
+            message: "Email verified successfully!",
+        });
+    } catch (error) {
+        console.error("verifyEmailController error:", error);
+        return res.status(500).json({
+            success: false,
+            error: true,
+            message: error.message || "Internal server error.",
+        });
     }
-
-    // 2️⃣ Find user and explicitly include otp fields
-    const user = await UserModel.findOne({ email }).select("+otp +otpExpires");
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        error: true,
-        message: "User not found.",
-      });
-    }
-
-    // 3️⃣ Check if OTP exists in DB
-    if (!user.otp || !user.otpExpires) {
-      return res.status(400).json({
-        success: false,
-        error: true,
-        message: "No OTP found. Please request a new one.",
-      });
-    }
-
-    // 4️⃣ Convert expiration to timestamp for consistent comparison
-    const otpExpiresTime = new Date(user.otpExpires).getTime();
-    const now = Date.now();
-
-    if (isNaN(otpExpiresTime) || otpExpiresTime < now) {
-      return res.status(400).json({
-        success: false,
-        error: true,
-        message: "OTP expired. Please request a new one.",
-      });
-    }
-
-    // 5️⃣ Check OTP match (convert both to string for consistency)
-    if (String(user.otp) !== String(otp)) {
-      return res.status(400).json({
-        success: false,
-        error: true,
-        message: "Invalid OTP. Please try again.",
-      });
-    }
-
-    // 6️⃣ Mark user verified and clear OTP
-    user.verify_email = true;
-    user.otp = null;
-    user.otpExpires = null;
-    await user.save();
-
-    // 7️⃣ Send success response
-    return res.status(200).json({
-      success: true,
-      error: false,
-      message: "Email verified successfully!",
-    });
-  } catch (error) {
-    console.error("verifyEmailController error:", error);
-    return res.status(500).json({
-      success: false,
-      error: true,
-      message: error.message || "Internal server error.",
-    });
-  }
 }
 
 
 export async function loginUserController(request, response) {
-  try {
-    const { email, password } = request.body;
+    try {
+        const { email, password } = request.body;
 
-    if (!email || !password) {
-      return response.status(400).json({
-        message: "Provide email and password",
-        error: true,
-        success: false
-      });
+        if (!email || !password) {
+            return response.status(400).json({
+                message: "Provide email and password",
+                error: true,
+                success: false
+            });
+        }
+
+        // IMPORTANT: select password explicitly if schema uses select: false
+        const user = await UserModel.findOne({ email }).select('+password');
+
+        if (!user) {
+            return response.status(400).json({
+                message: "User not registered",
+                error: true,
+                success: false
+            });
+        }
+
+        if (user.status !== "Active") {
+            return response.status(400).json({
+                message: "Contact to admin",
+                error: true,
+                success: false
+            });
+        }
+
+        if (user.verify_email !== true) {
+            return response.status(400).json({
+                message: "Your Email is not verified yet! Please Verify Your email",
+                error: true,
+                success: false
+            });
+        }
+
+        // Now user.password will be defined
+        const checkPassword = await bcryptjs.compare(password, user.password);
+
+        if (!checkPassword) {
+            return response.status(400).json({
+                message: "Check your password",
+                error: true,
+                success: false
+            });
+        }
+
+        const accessToken = await generatedAccessToken(user._id);
+        const refreshToken = await generatedRefreshToken(user._id);
+
+        await UserModel.findByIdAndUpdate(user._id, { last_login_date: new Date() });
+
+        const cookiesOption = {
+            httpOnly: true,
+            secure: true,
+            sameSite: "None"
+        };
+
+        response.cookie('accessToken', accessToken, cookiesOption);
+        response.cookie('refreshToken', refreshToken, cookiesOption);
+
+        return response.json({
+            message: "Login successfully",
+            error: false,
+            success: true,
+            data: {
+                accessToken,
+                refreshToken
+            }
+        });
+
+    } catch (error) {
+        console.error("loginUserController error:", error);
+        return response.status(500).json({
+            message: error.message || error,
+            error: true,
+            success: false
+        });
     }
-
-    // IMPORTANT: select password explicitly if schema uses select: false
-    const user = await UserModel.findOne({ email }).select('+password');
-
-    if (!user) {
-      return response.status(400).json({
-        message: "User not registered",
-        error: true,
-        success: false
-      });
-    }
-
-    if (user.status !== "Active") {
-      return response.status(400).json({
-        message: "Contact to admin",
-        error: true,
-        success: false
-      });
-    }
-
-    if (user.verify_email !== true) {
-      return response.status(400).json({
-        message: "Your Email is not verified yet! Please Verify Your email",
-        error: true,
-        success: false
-      });
-    }
-
-    // Now user.password will be defined
-    const checkPassword = await bcryptjs.compare(password, user.password);
-
-    if (!checkPassword) {
-      return response.status(400).json({
-        message: "Check your password",
-        error: true,
-        success: false
-      });
-    }
-
-    const accessToken = await generatedAccessToken(user._id);
-    const refreshToken = await generatedRefreshToken(user._id);
-
-    await UserModel.findByIdAndUpdate(user._id, { last_login_date: new Date() });
-
-    const cookiesOption = {
-      httpOnly: true,
-      secure: true,
-      sameSite: "None"
-    };
-
-    response.cookie('accessToken', accessToken, cookiesOption);
-    response.cookie('refreshToken', refreshToken, cookiesOption);
-
-    return response.json({
-      message: "Login successfully",
-      error: false,
-      success: true,
-      data: {
-        accessToken,
-        refreshToken
-      }
-    });
-
-  } catch (error) {
-    console.error("loginUserController error:", error);
-    return response.status(500).json({
-      message: error.message || error,
-      error: true,
-      success: false
-    });
-  }
 }
 
 
@@ -324,14 +324,19 @@ export async function userAvatarController(request, response) {
             overwrite: false,
         };
 
+        // New logic (Uses file buffer or data URI)
         for (let i = 0; i < request?.files?.length; i++) {
+            const file = request.files[i];
+
+            // Create a data URI from the buffer
+            const dataUri = `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
 
             const img = await cloudinary.uploader.upload(
-                request.files[i].path,
+                dataUri, // <-- Uploads the file data URI directly
                 options,
                 function (error, result) {
                     imagesArr.push(result.secure_url);
-                    fs.unlinkSync(`uploads/${request.files[i].filename}`);
+                    // DO NOT UNLINK FILE HERE! (No file was written to disk)
                 }
             );
         }
@@ -483,119 +488,119 @@ export async function updateUserDetails(request, response) {
 }
 // forgot password
 export async function forgotPasswordController(request, response) {
-  try {
-    const { email } = request.body;
+    try {
+        const { email } = request.body;
 
-    const user = await UserModel.findOne({ email: email });
+        const user = await UserModel.findOne({ email: email });
 
-    if (!user) {
-      return response.status(400).json({
-        message: "Email not available",
-        error: true,
-        success: false
-      });
+        if (!user) {
+            return response.status(400).json({
+                message: "Email not available",
+                error: true,
+                success: false
+            });
+        }
+
+        const verifyCode = Math.floor(100000 + Math.random() * 900000).toString();
+        user.otp = verifyCode;
+        user.otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes as Date object
+        await user.save();
+
+        await sendEmailFun(
+            user.email,
+            "Verify OTP from Campus Hive",
+            "",
+            VerificationEmail(user.name, verifyCode)
+        );
+
+        return response.json({
+            message: "Check your email for OTP",
+            error: false,
+            success: true
+        });
+
+    } catch (error) {
+        console.error("forgotPasswordController error:", error);
+        return response.status(500).json({
+            message: error.message || error,
+            error: true,
+            success: false
+        });
     }
-
-    const verifyCode = Math.floor(100000 + Math.random() * 900000).toString();
-    user.otp = verifyCode;
-    user.otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes as Date object
-    await user.save();
-
-    await sendEmailFun(
-      user.email,
-      "Verify OTP from Campus Hive",
-      "",
-      VerificationEmail(user.name, verifyCode)
-    );
-
-    return response.json({
-      message: "Check your email for OTP",
-      error: false,
-      success: true
-    });
-
-  } catch (error) {
-    console.error("forgotPasswordController error:", error);
-    return response.status(500).json({
-      message: error.message || error,
-      error: true,
-      success: false
-    });
-  }
 }
 
 
 export async function verifyForgotPasswordOtp(request, response) {
-  try {
-    const { email, otp } = request.body;
+    try {
+        const { email, otp } = request.body;
 
-    if (!email || !otp) {
-      return response.status(400).json({
-        message: "Provide required fields email and otp.",
-        error: true,
-        success: false
-      });
+        if (!email || !otp) {
+            return response.status(400).json({
+                message: "Provide required fields email and otp.",
+                error: true,
+                success: false
+            });
+        }
+
+        // select otp fields explicitly
+        const user = await UserModel.findOne({ email }).select('+otp +otpExpires');
+
+        if (!user) {
+            return response.status(400).json({
+                message: "Email not available",
+                error: true,
+                success: false
+            });
+        }
+
+        if (!user.otp) {
+            return response.status(400).json({
+                message: "No OTP found. Please request a new one.",
+                error: true,
+                success: false
+            });
+        }
+
+        // Normalize expiry to timestamp
+        const otpExpiresTs = user.otpExpires instanceof Date
+            ? user.otpExpires.getTime()
+            : Number(user.otpExpires);
+
+        if (!otpExpiresTs || isNaN(otpExpiresTs) || otpExpiresTs < Date.now()) {
+            return response.status(400).json({
+                message: "Otp is expired",
+                error: true,
+                success: false
+            });
+        }
+
+        if (String(otp) !== String(user.otp)) {
+            return response.status(400).json({
+                message: "Invalid OTP",
+                error: true,
+                success: false
+            });
+        }
+
+        // success: clear OTP and allow next step (e.g., reset password)
+        user.otp = "";
+        user.otpExpires = "";
+        await user.save();
+
+        return response.status(200).json({
+            message: "OTP Verified Successfully!!",
+            error: false,
+            success: true
+        });
+
+    } catch (error) {
+        console.error("verifyForgotPasswordOtp error:", error);
+        return response.status(500).json({
+            message: error.message || error,
+            error: true,
+            success: false
+        });
     }
-
-    // select otp fields explicitly
-    const user = await UserModel.findOne({ email }).select('+otp +otpExpires');
-
-    if (!user) {
-      return response.status(400).json({
-        message: "Email not available",
-        error: true,
-        success: false
-      });
-    }
-
-    if (!user.otp) {
-      return response.status(400).json({
-        message: "No OTP found. Please request a new one.",
-        error: true,
-        success: false
-      });
-    }
-
-    // Normalize expiry to timestamp
-    const otpExpiresTs = user.otpExpires instanceof Date
-      ? user.otpExpires.getTime()
-      : Number(user.otpExpires);
-
-    if (!otpExpiresTs || isNaN(otpExpiresTs) || otpExpiresTs < Date.now()) {
-      return response.status(400).json({
-        message: "Otp is expired",
-        error: true,
-        success: false
-      });
-    }
-
-    if (String(otp) !== String(user.otp)) {
-      return response.status(400).json({
-        message: "Invalid OTP",
-        error: true,
-        success: false
-      });
-    }
-
-    // success: clear OTP and allow next step (e.g., reset password)
-    user.otp = "";
-    user.otpExpires = "";
-    await user.save();
-
-    return response.status(200).json({
-      message: "OTP Verified Successfully!!",
-      error: false,
-      success: true
-    });
-
-  } catch (error) {
-    console.error("verifyForgotPasswordOtp error:", error);
-    return response.status(500).json({
-      message: error.message || error,
-      error: true,
-      success: false
-    });
-  }
 }
 
 
@@ -751,63 +756,63 @@ export async function userDetails(request, response) {
     }
 }
 export async function resendOtpController(req, res) {
-  try {
-    const { email } = req.body;
+    try {
+        const { email } = req.body;
 
-    // 1️⃣ Validate input
-    if (!email) {
-      return res.status(400).json({
-        success: false,
-        error: true,
-        message: "Email is required.",
-      });
+        // 1️⃣ Validate input
+        if (!email) {
+            return res.status(400).json({
+                success: false,
+                error: true,
+                message: "Email is required.",
+            });
+        }
+
+        // 2️⃣ Find user
+        const user = await UserModel.findOne({ email });
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                error: true,
+                message: "User not found.",
+            });
+        }
+
+        // 3️⃣ Generate new OTP and set new expiry
+        const verifyCode = Math.floor(100000 + Math.random() * 900000).toString();
+        user.otp = verifyCode;
+        user.otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 mins expiry
+        await user.save();
+
+        // 4️⃣ Send OTP email
+        const emailResult = await sendEmailFun(
+            email,
+            "Your new Campus Hive verification code",
+            "",
+            VerificationEmail(user.name || "User", verifyCode)
+        );
+
+        // 5️⃣ Handle email sending errors
+        if (!emailResult || emailResult.success === false) {
+            return res.status(500).json({
+                success: false,
+                error: true,
+                message: "Failed to send OTP email. Please try again later.",
+            });
+        }
+
+        // 6️⃣ Success response
+        return res.status(200).json({
+            success: true,
+            error: false,
+            message: "A new OTP has been sent to your email.",
+        });
+    } catch (error) {
+        console.error("resendOtpController error:", error);
+        return res.status(500).json({
+            success: false,
+            error: true,
+            message: error.message || "Internal server error.",
+        });
     }
-
-    // 2️⃣ Find user
-    const user = await UserModel.findOne({ email });
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        error: true,
-        message: "User not found.",
-      });
-    }
-
-    // 3️⃣ Generate new OTP and set new expiry
-    const verifyCode = Math.floor(100000 + Math.random() * 900000).toString();
-    user.otp = verifyCode;
-    user.otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 mins expiry
-    await user.save();
-
-    // 4️⃣ Send OTP email
-    const emailResult = await sendEmailFun(
-      email,
-      "Your new Campus Hive verification code",
-      "",
-      VerificationEmail(user.name || "User", verifyCode)
-    );
-
-    // 5️⃣ Handle email sending errors
-    if (!emailResult || emailResult.success === false) {
-      return res.status(500).json({
-        success: false,
-        error: true,
-        message: "Failed to send OTP email. Please try again later.",
-      });
-    }
-
-    // 6️⃣ Success response
-    return res.status(200).json({
-      success: true,
-      error: false,
-      message: "A new OTP has been sent to your email.",
-    });
-  } catch (error) {
-    console.error("resendOtpController error:", error);
-    return res.status(500).json({
-      success: false,
-      error: true,
-      message: error.message || "Internal server error.",
-    });
-  }
 }
