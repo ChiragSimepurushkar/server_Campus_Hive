@@ -358,7 +358,7 @@ export async function userAvatarController(request, response) {
     }
 }
 
-
+//dummy line
 export async function removeImageFromCloudinary(request, response) {
     const imgUrl = request.query.img;
     const urlArr = imgUrl.split("/");
