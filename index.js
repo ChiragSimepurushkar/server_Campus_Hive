@@ -53,9 +53,10 @@ app.use('/api/notifications', notificationRouter);
 app.use('/api/matchmaking', matchRouter);
 
 // --- 404 Handler for API routes ---
-app.use('/api/*', (req, res) => {
+// Remove the problematic line and replace with:
+app.use((req, res) => {
   res.status(404).json({
-    error: 'API endpoint not found',
+    error: 'Endpoint not found',
     path: req.originalUrl
   });
 });
